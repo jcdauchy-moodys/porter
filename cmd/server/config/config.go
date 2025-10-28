@@ -131,6 +131,7 @@ type MetricsConfig struct {
 type HealthConfig struct {
 	Enabled  bool          `yaml:"enabled" json:"enabled"`
 	Interval time.Duration `yaml:"interval" json:"interval"`
+	Query    string        `yaml:"query" json:"query"` // Custom health check query (e.g., "SELECT 1 FROM DUAL" for Oracle)
 }
 
 // ConnectionPoolConfig represents connection pool configuration.
@@ -169,12 +170,11 @@ type CacheItemConfig struct {
 
 // OracleConfig represents Oracle database configuration.
 type OracleConfig struct {
-	Host        string `yaml:"host" json:"host"`
-	Port        int    `yaml:"port" json:"port"`
-	ServiceName string `yaml:"service_name" json:"service_name"`
-	User        string `yaml:"user" json:"user"`
-	Password    string `yaml:"password" json:"password"`
-	SID         string `yaml:"sid" json:"sid"` // Alternative to ServiceName
+	Host        string `yaml:"host" json:"host" mapstructure:"host"`
+	Port        int    `yaml:"port" json:"port" mapstructure:"port"`
+	ServiceName string `yaml:"service_name" json:"service_name" mapstructure:"service_name"`
+	User        string `yaml:"user" json:"user" mapstructure:"user"`
+	Password    string `yaml:"password" json:"password" mapstructure:"password"`
 }
 
 // Validate validates the configuration.
@@ -204,8 +204,8 @@ func (c *Config) Validate() error {
 		if c.Oracle.Port <= 0 {
 			c.Oracle.Port = 1521 // Default Oracle port
 		}
-		if c.Oracle.ServiceName == "" && c.Oracle.SID == "" {
-			return fmt.Errorf("Oracle service name or SID is required")
+		if c.Oracle.ServiceName == "" {
+			return fmt.Errorf("Oracle service name is required")
 		}
 		if c.Oracle.User == "" {
 			return fmt.Errorf("Oracle user is required")

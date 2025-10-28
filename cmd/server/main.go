@@ -18,6 +18,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
+	pflag "github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -117,7 +118,6 @@ func init() {
 	serveCmd.Flags().String("oracle-host", "", "Oracle database host")
 	serveCmd.Flags().Int("oracle-port", 1521, "Oracle database port")
 	serveCmd.Flags().String("oracle-service-name", "", "Oracle service name")
-	serveCmd.Flags().String("oracle-sid", "", "Oracle SID")
 	serveCmd.Flags().String("oracle-user", "", "Oracle username")
 	serveCmd.Flags().String("oracle-password", "", "Oracle password")
 
@@ -299,21 +299,12 @@ func createEnterpriseServer(cfg *config.Config, logger zerolog.Logger, metricsCo
 	switch cfg.Backend {
 	case "oracle":
 		// Build Oracle DSN: oracle://user:password@host:port/servicename
-		if cfg.Oracle.ServiceName != "" {
-			dsn = fmt.Sprintf("oracle://%s:%s@%s:%d/%s",
-				cfg.Oracle.User,
-				cfg.Oracle.Password,
-				cfg.Oracle.Host,
-				cfg.Oracle.Port,
-				cfg.Oracle.ServiceName)
-		} else {
-			dsn = fmt.Sprintf("oracle://%s:%s@%s:%d/%s",
-				cfg.Oracle.User,
-				cfg.Oracle.Password,
-				cfg.Oracle.Host,
-				cfg.Oracle.Port,
-				cfg.Oracle.SID)
-		}
+		dsn = fmt.Sprintf("oracle://%s:%s@%s:%d/%s",
+			cfg.Oracle.User,
+			cfg.Oracle.Password,
+			cfg.Oracle.Host,
+			cfg.Oracle.Port,
+			cfg.Oracle.ServiceName)
 		driverName = "oracle"
 	case "clickhouse":
 		dsn = cfg.Database
@@ -324,6 +315,18 @@ func createEnterpriseServer(cfg *config.Config, logger zerolog.Logger, metricsCo
 		driverName = "duckdb"
 	}
 
+	// Determine health check query based on backend
+	healthCheckQuery := cfg.Health.Query
+	if healthCheckQuery == "" {
+		// Set default based on backend
+		switch cfg.Backend {
+		case "oracle":
+			healthCheckQuery = "SELECT 1 FROM DUAL"
+		default: // duckdb, clickhouse
+			healthCheckQuery = "SELECT 1"
+		}
+	}
+
 	poolCfg := pool.Config{
 		DSN:                dsn,
 		DriverName:         driverName,
@@ -332,6 +335,7 @@ func createEnterpriseServer(cfg *config.Config, logger zerolog.Logger, metricsCo
 		ConnMaxLifetime:    cfg.ConnectionTimeout,
 		ConnMaxIdleTime:    cfg.ConnectionTimeout / 2,
 		HealthCheckPeriod:  time.Minute,
+		HealthCheckQuery:   healthCheckQuery,
 		ConnectionTimeout:  cfg.ConnectionTimeout,
 	}
 
@@ -504,9 +508,45 @@ func loadConfig(cmd *cobra.Command) (*config.Config, error) {
 		if err := viper.ReadInConfig(); err != nil {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
+
+		// Unmarshal the entire config from file
+		cfg := &config.Config{}
+		if err := viper.Unmarshal(cfg); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+		}
+
+		// Override with command-line flags if they were explicitly set
+		// This allows CLI flags to take precedence over config file values
+		cmd.Flags().Visit(func(f *pflag.Flag) {
+			switch f.Name {
+			case "address":
+				cfg.Address = viper.GetString("address")
+			case "backend":
+				cfg.Backend = viper.GetString("backend")
+			case "log-level":
+				cfg.LogLevel = viper.GetString("log-level")
+			case "oracle-host":
+				cfg.Oracle.Host = viper.GetString("oracle-host")
+			case "oracle-port":
+				cfg.Oracle.Port = viper.GetInt("oracle-port")
+			case "oracle-service-name":
+				cfg.Oracle.ServiceName = viper.GetString("oracle-service-name")
+			case "oracle-user":
+				cfg.Oracle.User = viper.GetString("oracle-user")
+			case "oracle-password":
+				cfg.Oracle.Password = viper.GetString("oracle-password")
+			}
+		})
+
+		// Validate configuration
+		if err := cfg.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid configuration: %w", err)
+		}
+
+		return cfg, nil
 	}
 
-	// Build configuration
+	// Build configuration from flags/environment if no config file specified
 	cfg := &config.Config{
 		Address:           viper.GetString("address"),
 		Database:          viper.GetString("database"),
@@ -522,7 +562,6 @@ func loadConfig(cmd *cobra.Command) (*config.Config, error) {
 			Host:        viper.GetString("oracle-host"),
 			Port:        viper.GetInt("oracle-port"),
 			ServiceName: viper.GetString("oracle-service-name"),
-			SID:         viper.GetString("oracle-sid"),
 			User:        viper.GetString("oracle-user"),
 			Password:    viper.GetString("oracle-password"),
 		},

@@ -27,6 +27,7 @@ type Config struct {
 	ConnMaxLifetime    time.Duration `json:"conn_max_lifetime"`
 	ConnMaxIdleTime    time.Duration `json:"conn_max_idle_time"`
 	HealthCheckPeriod  time.Duration `json:"health_check_period"`
+	HealthCheckQuery   string        `json:"health_check_query"` // Custom health check query (defaults to "SELECT 1")
 	ConnectionTimeout  time.Duration `json:"connection_timeout"`
 
 	// Enterprise features
@@ -288,9 +289,14 @@ func (cv *ConnectionValidator) ValidateConnection(ctx context.Context, db *sql.D
 		return fmt.Errorf("ping failed: %w", err)
 	}
 
-	// Query test
+	// Query test using configured health check query
+	healthQuery := cv.config.HealthCheckQuery
+	if healthQuery == "" {
+		healthQuery = "SELECT 1" // Default for DuckDB, ClickHouse, etc.
+	}
+
 	var result int
-	if err := db.QueryRowContext(ctx, "SELECT 1").Scan(&result); err != nil {
+	if err := db.QueryRowContext(ctx, healthQuery).Scan(&result); err != nil {
 		return fmt.Errorf("query test failed: %w", err)
 	}
 
@@ -737,9 +743,14 @@ func (p *connectionPool) HealthCheck(ctx context.Context) error {
 		return pkgerrors.Wrap(err, pkgerrors.CodeConnectionFailed, "health check ping failed")
 	}
 
-	// Test query execution
+	// Test query execution using configured health check query
+	healthQuery := p.config.HealthCheckQuery
+	if healthQuery == "" {
+		healthQuery = "SELECT 1" // Default for DuckDB, ClickHouse, etc.
+	}
+
 	var result int
-	err := p.db.QueryRowContext(ctx, "SELECT 1").Scan(&result)
+	err := p.db.QueryRowContext(ctx, healthQuery).Scan(&result)
 	if err != nil || result != 1 {
 		p.updateHealthStatus("unhealthy", "query test failed")
 		return pkgerrors.Wrap(err, pkgerrors.CodeConnectionFailed, "health check query failed")
