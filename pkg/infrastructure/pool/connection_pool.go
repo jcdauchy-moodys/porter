@@ -21,6 +21,7 @@ import (
 // Config represents pool configuration.
 type Config struct {
 	DSN                string        `json:"dsn"`
+	DriverName         string        `json:"driver_name"` // duckdb, oracle, clickhouse
 	MaxOpenConnections int           `json:"max_open_connections"`
 	MaxIdleConnections int           `json:"max_idle_connections"`
 	ConnMaxLifetime    time.Duration `json:"conn_max_lifetime"`
@@ -533,7 +534,13 @@ func New(cfg Config, logger zerolog.Logger) (ConnectionPool, error) {
 		cfg.SlowQueryThreshold = 1 * time.Second
 	}
 
+	// Set default driver name
+	if cfg.DriverName == "" {
+		cfg.DriverName = "duckdb"
+	}
+
 	logger.Info().
+		Str("driver", cfg.DriverName).
 		Str("dsn", maskDSN(cfg.DSN)).
 		Int("max_open", cfg.MaxOpenConnections).
 		Int("max_idle", cfg.MaxIdleConnections).
@@ -541,9 +548,9 @@ func New(cfg Config, logger zerolog.Logger) (ConnectionPool, error) {
 		Dur("conn_idle_time", cfg.ConnMaxIdleTime).
 		Bool("circuit_breaker", cfg.EnableCircuitBreaker).
 		Bool("retry_enabled", cfg.EnableConnectionRetry).
-		Msg("Creating enterprise DuckDB connection pool")
+		Msg("Creating enterprise database connection pool")
 
-	db, err := sql.Open("duckdb", cfg.DSN)
+	db, err := sql.Open(cfg.DriverName, cfg.DSN)
 	if err != nil {
 		return nil, pkgerrors.Wrap(err, pkgerrors.CodeInternal, "failed to open database")
 	}
@@ -591,7 +598,7 @@ func New(cfg Config, logger zerolog.Logger) (ConnectionPool, error) {
 		go pool.healthCheckRoutine(ctx)
 	}
 
-	logger.Info().Msg("Enterprise DuckDB connection pool created successfully")
+	logger.Info().Str("driver", cfg.DriverName).Msg("Enterprise database connection pool created successfully")
 
 	return pool, nil
 }
@@ -748,7 +755,7 @@ func (p *connectionPool) Close() error {
 		return nil // Already closed
 	}
 
-	p.logger.Info().Msg("Closing enterprise DuckDB connection pool")
+	p.logger.Info().Msg("Closing enterprise database connection pool")
 
 	// Cancel the context to stop health check routine
 	p.cancel()

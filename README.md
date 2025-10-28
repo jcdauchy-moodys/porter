@@ -27,7 +27,7 @@
 
 ## What is Porter?
 
-Porter is a **high-performance Flight SQL server** that makes Arrow-native analytics effortless. It provides a flexible abstraction layer for different database backends, supporting both **DuckDB** and **ClickHouse** with a unified Flight SQL interface. It bridges the gap between analytical databases and modern data infrastructure by speaking the Flight SQL protocol natively.
+Porter is a **high-performance Flight SQL server** that makes Arrow-native analytics effortless. It provides a flexible abstraction layer for different database backends, supporting **DuckDB**, **ClickHouse**, and **Oracle Database** with a unified Flight SQL interface. It bridges the gap between analytical and transactional databases and modern data infrastructure by speaking the Flight SQL protocol natively.
 
 Think of it as **analytics with wings** – all the analytical power you love, now network-accessible with zero-copy Arrow streaming.
 

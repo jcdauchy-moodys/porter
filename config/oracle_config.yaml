@@ -1,0 +1,98 @@
+# Porter Oracle Backend Configuration
+# This configuration demonstrates how to configure Porter with an Oracle Database backend
+
+# Server settings
+address: "0.0.0.0:32010"
+backend: oracle
+log_level: info
+max_connections: 100
+connection_timeout: 30s
+query_timeout: 5m
+max_message_size: 16777216  # 16MB
+shutdown_timeout: 30s
+
+# Oracle Database configuration
+oracle:
+  host: "localhost"
+  port: 1521
+  service_name: "ORCL"  # Use either service_name or sid, not both
+  # sid: "ORCL"         # Alternative to service_name
+  user: "your_username"
+  password: "your_password"
+
+# TLS configuration (optional)
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""
+  ca_file: ""
+  client_auth: false
+  client_ca_cert_file: ""
+  insecure_skip_verify: false
+
+# Authentication configuration (optional)
+auth:
+  enabled: false
+  type: basic  # basic, bearer, mtls, oauth2
+  
+  # Basic authentication
+  basic_auth:
+    users:
+      admin:
+        password: "admin123"
+        roles:
+          - admin
+      user:
+        password: "user123"
+        roles:
+          - user
+
+# Metrics configuration
+metrics:
+  enabled: true
+  address: ":9090"
+  path: "/metrics"
+
+# Health check configuration
+health:
+  enabled: true
+  interval: 10s
+
+# Enable gRPC reflection
+reflection: true
+
+# Connection pool configuration
+connection_pool:
+  max_open_connections: 25
+  max_idle_connections: 5
+  conn_max_lifetime: 30m
+  conn_max_idle_time: 10m
+  health_check_period: 1m
+
+# Transaction configuration
+transaction:
+  default_isolation_level: "READ_COMMITTED"  # Oracle supports READ_COMMITTED and SERIALIZABLE
+  max_transaction_age: 1h
+  cleanup_interval: 5m
+
+# Cache configuration
+cache:
+  enabled: true
+  max_size: 104857600  # 100MB
+  ttl: 5m
+  cleanup_interval: 1m
+  enable_stats: true
+  
+  prepared_statements:
+    enabled: true
+    max_size: 10485760  # 10MB
+    ttl: 1h
+  
+  query_results:
+    enabled: true
+    max_size: 52428800  # 50MB
+    ttl: 5m
+
+# Performance options
+safe_copy: false
+
