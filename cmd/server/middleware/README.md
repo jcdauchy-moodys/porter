@@ -56,15 +56,105 @@ JWT authentication supports multiple signing methods:
 - RSA (RS256, RS384, RS512)
 - ECDSA (ES256, ES384, ES512)
 
+#### HMAC Configuration (HS256)
+
+For symmetric key signing (shared secret):
+
 ```yaml
 auth:
   enabled: true
   type: jwt
   jwt_auth:
-    secret: "your-secret-key"  # For HMAC
-    public_key: "path/to/public.pem"  # For RSA/ECDSA
+    secret: "your-secret-key-minimum-32-chars"
     issuer: "your-issuer"
     audience: "your-audience"
+```
+
+#### RSA Configuration (RS256)
+
+For asymmetric key signing (public/private key pair):
+
+```yaml
+auth:
+  enabled: true
+  type: jwt
+  jwt_auth:
+    public_key_file: "/path/to/rsa_public.pem"
+    issuer: "your-issuer"
+    audience: "your-audience"
+```
+
+If you also want to issue tokens (not just validate them):
+
+```yaml
+auth:
+  enabled: true
+  type: jwt
+  jwt_auth:
+    private_key_file: "/path/to/rsa_private.pem"
+    issuer: "your-issuer"
+    audience: "your-audience"
+```
+
+#### ECDSA Configuration (ES256)
+
+For elliptic curve signing:
+
+```yaml
+auth:
+  enabled: true
+  type: jwt
+  jwt_auth:
+    public_key_file: "/path/to/ecdsa_public.pem"
+    issuer: "your-issuer"
+    audience: "your-audience"
+```
+
+#### Generating RSA Keys
+
+Generate an RSA key pair for RS256:
+
+```bash
+# Generate private key (2048-bit)
+openssl genrsa -out rsa_private.pem 2048
+
+# Extract public key
+openssl rsa -in rsa_private.pem -pubout -out rsa_public.pem
+
+# For 4096-bit (more secure)
+openssl genrsa -out rsa_private.pem 4096
+openssl rsa -in rsa_private.pem -pubout -out rsa_public.pem
+```
+
+#### Generating ECDSA Keys
+
+Generate an ECDSA key pair for ES256:
+
+```bash
+# Generate private key (P-256 curve)
+openssl ecparam -name prime256v1 -genkey -noout -out ecdsa_private.pem
+
+# Extract public key
+openssl ec -in ecdsa_private.pem -pubout -out ecdsa_public.pem
+```
+
+#### JWT Token Requirements
+
+All JWT tokens must include:
+- `sub` (subject): User identifier
+- `exp` (expiration): Token expiration time (Unix timestamp)
+- `iss` (issuer): Must match configured issuer
+- `aud` (audience): Must match configured audience
+
+Example JWT payload:
+```json
+{
+  "sub": "user@example.com",
+  "exp": 1735689600,
+  "iss": "porter-server",
+  "aud": "porter-client",
+  "roles": ["admin", "read"]
+}
 ```
 
 ### OAuth2 Authentication

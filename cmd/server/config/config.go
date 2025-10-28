@@ -101,9 +101,11 @@ type BearerAuthConfig struct {
 
 // JWTAuthConfig represents JWT authentication configuration.
 type JWTAuthConfig struct {
-	Secret   string `yaml:"secret" json:"secret" mapstructure:"secret"`
-	Issuer   string `yaml:"issuer" json:"issuer" mapstructure:"issuer"`
-	Audience string `yaml:"audience" json:"audience" mapstructure:"audience"`
+	Secret         string `yaml:"secret" json:"secret" mapstructure:"secret"`                               // For HMAC (HS256, HS384, HS512)
+	PublicKeyFile  string `yaml:"public_key_file" json:"public_key_file" mapstructure:"public_key_file"`    // For RSA/ECDSA public key (RS256, ES256, etc.)
+	PrivateKeyFile string `yaml:"private_key_file" json:"private_key_file" mapstructure:"private_key_file"` // For RSA/ECDSA private key (if issuing tokens)
+	Issuer         string `yaml:"issuer" json:"issuer" mapstructure:"issuer"`
+	Audience       string `yaml:"audience" json:"audience" mapstructure:"audience"`
 }
 
 // OAuth2Config represents OAuth2 authentication configuration.
@@ -254,8 +256,9 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("bearer auth requires tokens or tokens file")
 			}
 		case "jwt":
-			if c.Auth.JWTAuth.Secret == "" {
-				return fmt.Errorf("JWT auth requires secret")
+			// Either HMAC secret or RSA/ECDSA key file must be provided
+			if c.Auth.JWTAuth.Secret == "" && c.Auth.JWTAuth.PublicKeyFile == "" && c.Auth.JWTAuth.PrivateKeyFile == "" {
+				return fmt.Errorf("JWT auth requires either secret (for HMAC) or public_key_file/private_key_file (for RSA/ECDSA)")
 			}
 		case "oauth2":
 			if c.Auth.OAuth2Auth.ClientID == "" || c.Auth.OAuth2Auth.ClientSecret == "" {
