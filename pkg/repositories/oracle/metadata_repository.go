@@ -75,42 +75,90 @@ WHERE  1=1`)
 }
 
 func (r *metadataRepository) GetTables(ctx context.Context, opt models.GetTablesOptions) ([]models.Table, error) {
-	var sb strings.Builder
-	sb.WriteString(`
+	// Determine which table types to query
+	includeTable := false
+	includeView := false
+	includeSynonym := false
+	includeSystemTable := false
+	includeSystemView := false
+
+	for _, t := range opt.TableTypes {
+		switch strings.ToUpper(t) {
+		case "TABLE", "BASE TABLE":
+			includeTable = true
+		case "VIEW", "MATERIALIZED VIEW":
+			includeView = true
+		case "SYNONYM", "ALIAS":
+			includeSynonym = true
+		case "SYSTEM TABLE":
+			includeSystemTable = true
+		case "SYSTEM VIEW":
+			includeSystemView = true
+		}
+	}
+
+	// If nothing specific was matched, include tables and views by default
+	// Don't include system tables/views by default - they clutter the list
+	if !includeTable && !includeView && !includeSynonym && !includeSystemTable && !includeSystemView {
+		includeTable = true
+		includeView = true
+	}
+
+	var queries []string
+	args := []interface{}{"ORACLE"}
+	argCount := 2
+
+	// Build table query (user tables only)
+	if includeTable {
+		var sb strings.Builder
+		sb.WriteString(`
 SELECT 
     :1 as table_catalog,
     owner as table_schema, 
     table_name, 
-    'BASE TABLE' as table_type
+    'TABLE' as table_type
 FROM   all_tables
-WHERE  1=1`)
+WHERE  1=1
+  AND owner NOT IN ('SYS', 'SYSTEM', 'CTXSYS', 'MDSYS', 'OLAPSYS', 'ORDSYS', 'WMSYS', 'XDB', 'ORDDATA', 'EXFSYS', 'DBSNMP')`)
 
-	args := []interface{}{"ORACLE"}
-	argCount := 2
-
-	if opt.SchemaFilterPattern != nil && !isWild(strPtr(opt.SchemaFilterPattern)) {
-		sb.WriteString(fmt.Sprintf(" AND owner LIKE :%d", argCount))
-		args = append(args, strings.ToUpper(likeDeref(opt.SchemaFilterPattern)))
-		argCount++
-	}
-	if !isWild(strPtr(opt.TableNameFilterPattern)) {
-		sb.WriteString(fmt.Sprintf(" AND table_name LIKE :%d", argCount))
-		args = append(args, strings.ToUpper(likeDeref(opt.TableNameFilterPattern)))
-		argCount++
-	}
-
-	// Add views if table types include VIEW
-	hasView := false
-	for _, t := range opt.TableTypes {
-		if t == "VIEW" {
-			hasView = true
-			break
+		if opt.SchemaFilterPattern != nil && !isWild(strPtr(opt.SchemaFilterPattern)) {
+			sb.WriteString(fmt.Sprintf(" AND owner LIKE :%d", argCount))
+			args = append(args, strings.ToUpper(likeDeref(opt.SchemaFilterPattern)))
 		}
+		if !isWild(strPtr(opt.TableNameFilterPattern)) {
+			sb.WriteString(fmt.Sprintf(" AND table_name LIKE :%d", argCount+1))
+			args = append(args, strings.ToUpper(likeDeref(opt.TableNameFilterPattern)))
+		}
+		queries = append(queries, sb.String())
 	}
 
-	// If specific types are requested and VIEW is included, add UNION for views
-	if len(opt.TableTypes) > 0 && hasView {
-		sb.WriteString(" UNION ALL ")
+	// Build system table query
+	if includeSystemTable {
+		var sb strings.Builder
+		sb.WriteString(`
+SELECT 
+    :1 as table_catalog,
+    owner as table_schema, 
+    table_name, 
+    'SYSTEM TABLE' as table_type
+FROM   all_tables
+WHERE  1=1
+  AND owner IN ('SYS', 'SYSTEM', 'CTXSYS', 'MDSYS', 'OLAPSYS', 'ORDSYS', 'WMSYS', 'XDB', 'ORDDATA', 'EXFSYS', 'DBSNMP')`)
+
+		if opt.SchemaFilterPattern != nil && !isWild(strPtr(opt.SchemaFilterPattern)) {
+			sb.WriteString(fmt.Sprintf(" AND owner LIKE :%d", argCount))
+			args = append(args, strings.ToUpper(likeDeref(opt.SchemaFilterPattern)))
+		}
+		if !isWild(strPtr(opt.TableNameFilterPattern)) {
+			sb.WriteString(fmt.Sprintf(" AND table_name LIKE :%d", argCount+1))
+			args = append(args, strings.ToUpper(likeDeref(opt.TableNameFilterPattern)))
+		}
+		queries = append(queries, sb.String())
+	}
+
+	// Build view query (user views only)
+	if includeView {
+		var sb strings.Builder
 		sb.WriteString(`
 SELECT 
     :1 as table_catalog,
@@ -118,28 +166,72 @@ SELECT
     view_name as table_name, 
     'VIEW' as table_type
 FROM   all_views
+WHERE  1=1
+  AND owner NOT IN ('SYS', 'SYSTEM', 'CTXSYS', 'MDSYS', 'OLAPSYS', 'ORDSYS', 'WMSYS', 'XDB', 'ORDDATA', 'EXFSYS', 'DBSNMP')`)
+
+		if opt.SchemaFilterPattern != nil && !isWild(strPtr(opt.SchemaFilterPattern)) {
+			sb.WriteString(fmt.Sprintf(" AND owner LIKE :%d", argCount))
+		}
+		if !isWild(strPtr(opt.TableNameFilterPattern)) {
+			sb.WriteString(fmt.Sprintf(" AND view_name LIKE :%d", argCount+1))
+		}
+		queries = append(queries, sb.String())
+	}
+
+	// Build system view query
+	if includeSystemView {
+		var sb strings.Builder
+		sb.WriteString(`
+SELECT 
+    :1 as table_catalog,
+    owner as table_schema, 
+    view_name as table_name, 
+    'SYSTEM VIEW' as table_type
+FROM   all_views
+WHERE  1=1
+  AND owner IN ('SYS', 'SYSTEM', 'CTXSYS', 'MDSYS', 'OLAPSYS', 'ORDSYS', 'WMSYS', 'XDB', 'ORDDATA', 'EXFSYS', 'DBSNMP')`)
+
+		if opt.SchemaFilterPattern != nil && !isWild(strPtr(opt.SchemaFilterPattern)) {
+			sb.WriteString(fmt.Sprintf(" AND owner LIKE :%d", argCount))
+		}
+		if !isWild(strPtr(opt.TableNameFilterPattern)) {
+			sb.WriteString(fmt.Sprintf(" AND view_name LIKE :%d", argCount+1))
+		}
+		queries = append(queries, sb.String())
+	}
+
+	// Build synonym query
+	if includeSynonym {
+		var sb strings.Builder
+		sb.WriteString(`
+SELECT 
+    :1 as table_catalog,
+    owner as table_schema, 
+    synonym_name as table_name, 
+    'SYNONYM' as table_type
+FROM   all_synonyms
 WHERE  1=1`)
 
 		if opt.SchemaFilterPattern != nil && !isWild(strPtr(opt.SchemaFilterPattern)) {
 			sb.WriteString(fmt.Sprintf(" AND owner LIKE :%d", argCount))
-			args = append(args, strings.ToUpper(likeDeref(opt.SchemaFilterPattern)))
-			argCount++
 		}
 		if !isWild(strPtr(opt.TableNameFilterPattern)) {
-			sb.WriteString(fmt.Sprintf(" AND view_name LIKE :%d", argCount))
-			args = append(args, strings.ToUpper(likeDeref(opt.TableNameFilterPattern)))
+			sb.WriteString(fmt.Sprintf(" AND synonym_name LIKE :%d", argCount+1))
 		}
+		queries = append(queries, sb.String())
 	}
 
-	sb.WriteString(" ORDER BY table_schema, table_name")
+	// Combine queries with UNION ALL
+	finalQuery := strings.Join(queries, " UNION ALL ")
+	finalQuery += " ORDER BY table_schema, table_name"
 
 	db, err := r.conn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, sb.String(), args...)
+	rows, err := db.QueryContext(ctx, finalQuery, args...)
 	if err != nil {
-		return nil, r.wrapDBErr(err, sb.String())
+		return nil, r.wrapDBErr(err, finalQuery)
 	}
 	defer rows.Close()
 
@@ -147,7 +239,8 @@ WHERE  1=1`)
 }
 
 func (r *metadataRepository) GetTableTypes(context.Context) ([]string, error) {
-	return []string{"BASE TABLE", "VIEW"}, nil
+	// Return all table types supported by Oracle implementation
+	return []string{"TABLE", "VIEW", "SYNONYM", "SYSTEM TABLE", "SYSTEM VIEW"}, nil
 }
 
 func (r *metadataRepository) GetColumns(ctx context.Context, ref models.TableRef) ([]models.Column, error) {

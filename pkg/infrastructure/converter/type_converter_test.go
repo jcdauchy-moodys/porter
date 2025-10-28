@@ -67,6 +67,101 @@ func TestTypeConverter(t *testing.T) {
 				want:     &arrow.Decimal128Type{Precision: 18, Scale: 2},
 			},
 			{
+				name:     "numeric",
+				duckType: "numeric(10,4)",
+				want:     &arrow.Decimal128Type{Precision: 10, Scale: 4},
+			},
+			{
+				name:     "Oracle NUMBER without precision",
+				duckType: "NUMBER",
+				want:     arrow.PrimitiveTypes.Float64,
+			},
+			{
+				name:     "Oracle number lowercase",
+				duckType: "number",
+				want:     arrow.PrimitiveTypes.Float64,
+			},
+			{
+				name:     "Oracle NUMBER with precision",
+				duckType: "NUMBER(10,2)",
+				want:     &arrow.Decimal128Type{Precision: 10, Scale: 2},
+			},
+			{
+				name:     "Oracle number with precision lowercase",
+				duckType: "number(15,3)",
+				want:     &arrow.Decimal128Type{Precision: 15, Scale: 3},
+			},
+			{
+				name:     "Oracle BINARY_FLOAT",
+				duckType: "BINARY_FLOAT",
+				want:     arrow.PrimitiveTypes.Float32,
+			},
+			{
+				name:     "Oracle BINARY_DOUBLE",
+				duckType: "BINARY_DOUBLE",
+				want:     arrow.PrimitiveTypes.Float64,
+			},
+			{
+				name:     "Oracle VARCHAR2",
+				duckType: "VARCHAR2",
+				want:     arrow.BinaryTypes.String,
+			},
+			{
+				name:     "Oracle NVARCHAR2",
+				duckType: "NVARCHAR2",
+				want:     arrow.BinaryTypes.String,
+			},
+			{
+				name:     "Oracle CLOB",
+				duckType: "CLOB",
+				want:     arrow.BinaryTypes.String,
+			},
+			{
+				name:     "Oracle NCLOB",
+				duckType: "NCLOB",
+				want:     arrow.BinaryTypes.String,
+			},
+			{
+				name:     "Oracle RAW",
+				duckType: "RAW",
+				want:     arrow.BinaryTypes.Binary,
+			},
+			{
+				name:     "Oracle LONG RAW",
+				duckType: "LONG RAW",
+				want:     arrow.BinaryTypes.Binary,
+			},
+			{
+				name:     "Oracle TIMESTAMP WITH TIME ZONE",
+				duckType: "TIMESTAMP WITH TIME ZONE",
+				want:     arrow.FixedWidthTypes.Timestamp_us,
+			},
+			{
+				name:     "Oracle TIMESTAMP WITH LOCAL TIME ZONE",
+				duckType: "TIMESTAMP WITH LOCAL TIME ZONE",
+				want:     arrow.FixedWidthTypes.Timestamp_us,
+			},
+			{
+				name:     "Oracle INTERVAL YEAR TO MONTH",
+				duckType: "INTERVAL YEAR TO MONTH",
+				want:     arrow.FixedWidthTypes.MonthInterval,
+			},
+			{
+				name:     "Oracle INTERVAL DAY TO SECOND",
+				duckType: "INTERVAL DAY TO SECOND",
+				want:     arrow.FixedWidthTypes.Duration_ns,
+			},
+			{
+				name:     "Oracle ROWID",
+				duckType: "ROWID",
+				want:     arrow.BinaryTypes.String,
+			},
+			{
+				name:     "Oracle UROWID",
+				duckType: "UROWID",
+				want:     arrow.BinaryTypes.String,
+			},
+			{
 				name:     "invalid type",
 				duckType: "invalid_type",
 				wantErr:  true,
@@ -203,6 +298,71 @@ func TestTypeConverter(t *testing.T) {
 				name:     "numeric",
 				duckType: "numeric",
 				want:     int32(java_sql_Types_NUMERIC),
+			},
+			{
+				name:     "Oracle number",
+				duckType: "number",
+				want:     int32(java_sql_Types_NUMERIC),
+			},
+			{
+				name:     "Oracle NUMBER uppercase",
+				duckType: "NUMBER",
+				want:     int32(java_sql_Types_NUMERIC),
+			},
+			{
+				name:     "Oracle binary_float",
+				duckType: "binary_float",
+				want:     int32(java_sql_Types_FLOAT),
+			},
+			{
+				name:     "Oracle binary_double",
+				duckType: "binary_double",
+				want:     int32(java_sql_Types_DOUBLE),
+			},
+			{
+				name:     "Oracle varchar2",
+				duckType: "varchar2",
+				want:     int32(java_sql_Types_VARCHAR),
+			},
+			{
+				name:     "Oracle nvarchar2",
+				duckType: "nvarchar2",
+				want:     int32(java_sql_Types_NVARCHAR),
+			},
+			{
+				name:     "Oracle clob",
+				duckType: "clob",
+				want:     int32(java_sql_Types_CLOB),
+			},
+			{
+				name:     "Oracle nclob",
+				duckType: "nclob",
+				want:     int32(java_sql_Types_NCLOB),
+			},
+			{
+				name:     "Oracle raw",
+				duckType: "raw",
+				want:     int32(java_sql_Types_VARBINARY),
+			},
+			{
+				name:     "Oracle long raw",
+				duckType: "long raw",
+				want:     int32(java_sql_Types_LONGVARBINARY),
+			},
+			{
+				name:     "Oracle timestamp with time zone",
+				duckType: "timestamp with time zone",
+				want:     int32(java_sql_Types_TIMESTAMP_WITH_TIMEZONE),
+			},
+			{
+				name:     "Oracle rowid",
+				duckType: "rowid",
+				want:     int32(java_sql_Types_ROWID),
+			},
+			{
+				name:     "Oracle urowid",
+				duckType: "urowid",
+				want:     int32(java_sql_Types_ROWID),
 			},
 			{
 				name:     "boolean",
@@ -356,6 +516,116 @@ func TestTypeConverter(t *testing.T) {
 				}
 				require.NoError(t, err)
 				assert.Equal(t, tt.want, got)
+			})
+		}
+	})
+
+	t.Run("inferOracleInternalType", func(t *testing.T) {
+		// Access the internal typeConverter to test the inference function
+		internalTC := tc.(*typeConverter)
+
+		tests := []struct {
+			name    string
+			dbType  string
+			want    arrow.DataType
+			wantNil bool
+		}{
+			{
+				name:   "timestampdty",
+				dbType: "timestampdty",
+				want:   arrow.FixedWidthTypes.Timestamp_us,
+			},
+			{
+				name:   "TIMESTAMPDTY uppercase",
+				dbType: "TIMESTAMPDTY",
+				want:   arrow.FixedWidthTypes.Timestamp_us,
+			},
+			{
+				name:   "numberdty",
+				dbType: "numberdty",
+				want:   arrow.PrimitiveTypes.Float64,
+			},
+			{
+				name:   "stringdty",
+				dbType: "stringdty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:   "chardty",
+				dbType: "chardty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:   "varchardty",
+				dbType: "varchardty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:   "datedty",
+				dbType: "datedty",
+				want:   arrow.FixedWidthTypes.Date32,
+			},
+			{
+				name:   "timedty",
+				dbType: "timedty",
+				want:   arrow.FixedWidthTypes.Time64us,
+			},
+			{
+				name:   "floatdty",
+				dbType: "floatdty",
+				want:   arrow.PrimitiveTypes.Float64,
+			},
+			{
+				name:   "doubledty",
+				dbType: "doubledty",
+				want:   arrow.PrimitiveTypes.Float64,
+			},
+			{
+				name:   "integerdty",
+				dbType: "integerdty",
+				want:   arrow.PrimitiveTypes.Int64,
+			},
+			{
+				name:   "blobdty",
+				dbType: "blobdty",
+				want:   arrow.BinaryTypes.Binary,
+			},
+			{
+				name:   "rawdty",
+				dbType: "rawdty",
+				want:   arrow.BinaryTypes.Binary,
+			},
+			{
+				name:   "clobdty",
+				dbType: "clobdty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:   "intervaldty",
+				dbType: "intervaldty",
+				want:   arrow.FixedWidthTypes.MonthDayNanoInterval,
+			},
+			{
+				name:   "rowiddty",
+				dbType: "rowiddty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:    "unknown type",
+				dbType:  "unknowndty",
+				wantNil: true,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				got := internalTC.inferOracleInternalType(tt.dbType)
+				if tt.wantNil {
+					assert.Nil(t, got)
+				} else {
+					require.NotNil(t, got)
+					assert.Equal(t, tt.want, got)
+				}
 			})
 		}
 	})

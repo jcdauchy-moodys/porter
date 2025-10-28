@@ -15,10 +15,9 @@ shutdown_timeout: 30s
 oracle:
   host: "localhost"
   port: 1521
-  service_name: "ORCL"  # Use either service_name or sid, not both
-  # sid: "ORCL"         # Alternative to service_name
-  user: "your_username"
-  password: "your_password"
+  service_name: "XEPDB1"
+  user: "system"
+  password: "oracle"
 
 # TLS configuration (optional)
 tls:
@@ -57,6 +56,7 @@ metrics:
 health:
   enabled: true
   interval: 10s
+  query: "SELECT 1 FROM DUAL"  # Oracle-specific health check query
 
 # Enable gRPC reflection
 reflection: true

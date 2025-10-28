@@ -148,6 +148,83 @@ func TestMetadataService_GetSchemas(t *testing.T) {
 	})
 }
 
+func TestMetadataService_GetTables_WithDefaultTypes(t *testing.T) {
+	t.Run("EmptyTableTypes_UsesDefaults", func(t *testing.T) {
+		service, repo, _, _ := setupTestMetadataService()
+
+		// Setup mock to capture the options passed to GetTables
+		var capturedOpts models.GetTablesOptions
+		repo.getTablesFunc = func(ctx context.Context, opts models.GetTablesOptions) ([]models.Table, error) {
+			capturedOpts = opts
+			return []models.Table{
+				{Name: "test_table", SchemaName: "test_schema", Type: "TABLE"},
+			}, nil
+		}
+
+		// Call with empty TableTypes
+		opts := models.GetTablesOptions{
+			TableTypes: []string{}, // Empty slice
+		}
+
+		_, err := service.GetTables(context.Background(), opts)
+		require.NoError(t, err)
+
+		// Verify that default types were added
+		assert.NotEmpty(t, capturedOpts.TableTypes)
+		assert.Contains(t, capturedOpts.TableTypes, "TABLE")
+		assert.Contains(t, capturedOpts.TableTypes, "VIEW")
+		assert.Contains(t, capturedOpts.TableTypes, "SYNONYM")
+	})
+
+	t.Run("NilTableTypes_UsesDefaults", func(t *testing.T) {
+		service, repo, _, _ := setupTestMetadataService()
+
+		var capturedOpts models.GetTablesOptions
+		repo.getTablesFunc = func(ctx context.Context, opts models.GetTablesOptions) ([]models.Table, error) {
+			capturedOpts = opts
+			return []models.Table{
+				{Name: "test_table", SchemaName: "test_schema", Type: "TABLE"},
+			}, nil
+		}
+
+		// Call with nil TableTypes
+		opts := models.GetTablesOptions{
+			TableTypes: nil, // Nil slice
+		}
+
+		_, err := service.GetTables(context.Background(), opts)
+		require.NoError(t, err)
+
+		// Verify that default types were added
+		assert.NotEmpty(t, capturedOpts.TableTypes)
+		assert.Contains(t, capturedOpts.TableTypes, "TABLE")
+		assert.Contains(t, capturedOpts.TableTypes, "VIEW")
+	})
+
+	t.Run("SpecificTableTypes_PreservesInput", func(t *testing.T) {
+		service, repo, _, _ := setupTestMetadataService()
+
+		var capturedOpts models.GetTablesOptions
+		repo.getTablesFunc = func(ctx context.Context, opts models.GetTablesOptions) ([]models.Table, error) {
+			capturedOpts = opts
+			return []models.Table{
+				{Name: "test_view", SchemaName: "test_schema", Type: "VIEW"},
+			}, nil
+		}
+
+		// Call with specific TableTypes
+		opts := models.GetTablesOptions{
+			TableTypes: []string{"VIEW"}, // Specific type
+		}
+
+		_, err := service.GetTables(context.Background(), opts)
+		require.NoError(t, err)
+
+		// Verify that input was preserved
+		assert.Equal(t, []string{"VIEW"}, capturedOpts.TableTypes)
+	})
+}
+
 func TestMetadataService_GetTables(t *testing.T) {
 	service, repo, _, _ := setupTestMetadataService()
 

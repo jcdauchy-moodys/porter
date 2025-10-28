@@ -54,16 +54,17 @@ func New(logger zerolog.Logger) TypeConverter {
 
 // ConvertDuckDBTypeToArrow converts a DuckDB type string to an Apache Arrow DataType.
 func ConvertDuckDBTypeToArrow(duckdbType string) (arrow.DataType, error) {
-	// Handle decimal or numeric types
-	if strings.HasPrefix(duckdbType, "decimal") || strings.HasPrefix(duckdbType, "numeric") {
+	// Handle decimal, numeric, or number types (Oracle uses NUMBER)
+	lowerType := strings.ToLower(duckdbType)
+	if strings.HasPrefix(lowerType, "decimal") || strings.HasPrefix(lowerType, "numeric") || strings.HasPrefix(lowerType, "number") {
 		// Default precision and scale
 		precision := int32(38)
 		scale := int32(4)
 
-		// Regular expression to match decimal(p,s) or numeric(p,s)
-		// Example: decimal(18,2) or numeric(10,3)
-		re := regexp.MustCompile(`^(decimal|numeric)\((\d+),(\d+)\)$`)
-		matches := re.FindStringSubmatch(strings.ToLower(duckdbType))
+		// Regular expression to match decimal(p,s), numeric(p,s), or number(p,s)
+		// Example: decimal(18,2), numeric(10,3), or NUMBER(10,2)
+		re := regexp.MustCompile(`^(decimal|numeric|number)\((\d+),(\d+)\)$`)
+		matches := re.FindStringSubmatch(lowerType)
 
 		if len(matches) == 4 {
 			// Parse precision
@@ -185,7 +186,27 @@ func (tc *typeConverter) getArrowTypeFromColumnType(col *sql.ColumnType) (arrow.
 	// First try database type name
 	dbType := col.DatabaseTypeName()
 	if dbType != "" {
-		return tc.DuckDBToArrowType(dbType)
+		arrowType, err := tc.DuckDBToArrowType(dbType)
+		if err == nil {
+			return arrowType, nil
+		}
+
+		// If DuckDBToArrowType failed, try to infer from Oracle internal type names
+		// The go-ora driver sometimes returns internal Oracle type constants like "timestampdty"
+		inferredType := tc.inferOracleInternalType(dbType)
+		if inferredType != nil {
+			tc.logger.Debug().
+				Str("db_type", dbType).
+				Str("inferred_type", inferredType.String()).
+				Msg("Inferred Oracle internal type")
+			return inferredType, nil
+		}
+
+		// If we still can't convert, log the error but continue to scan type fallback
+		tc.logger.Warn().
+			Str("db_type", dbType).
+			Err(err).
+			Msg("Failed to convert database type, falling back to scan type")
 	}
 
 	// Fall back to scan type
@@ -230,6 +251,59 @@ func (tc *typeConverter) getArrowTypeFromColumnType(col *sql.ColumnType) (arrow.
 	default:
 		// Default to string for unknown types
 		return arrow.BinaryTypes.String, nil
+	}
+}
+
+// inferOracleInternalType attempts to infer Arrow type from Oracle internal type names.
+// The go-ora driver sometimes returns internal Oracle type constants that end with "dty" (data type).
+// Examples: "timestampdty", "numberdty", "stringdty", etc.
+func (tc *typeConverter) inferOracleInternalType(dbType string) arrow.DataType {
+	dbTypeLower := strings.ToLower(dbType)
+
+	// Check for common Oracle internal type patterns
+	// Order matters - check more specific patterns first
+	switch {
+	// Date/Time types - check timestamp before date since "timestamp" contains "time"
+	case strings.Contains(dbTypeLower, "timestamp"):
+		return arrow.FixedWidthTypes.Timestamp_us
+	case strings.Contains(dbTypeLower, "interval"):
+		return arrow.FixedWidthTypes.MonthDayNanoInterval
+	case strings.HasPrefix(dbTypeLower, "date") || strings.Contains(dbTypeLower, "datedty"):
+		// Match "date" at start or "datedty" pattern
+		return arrow.FixedWidthTypes.Date32
+	case strings.Contains(dbTypeLower, "time") && !strings.Contains(dbTypeLower, "timestamp"):
+		// Match "time" but not if it's part of "timestamp"
+		return arrow.FixedWidthTypes.Time64us
+
+	// Numeric types - check before int since numbers might contain "int"
+	case strings.Contains(dbTypeLower, "number") || strings.Contains(dbTypeLower, "numeric"):
+		return arrow.PrimitiveTypes.Float64
+	case strings.Contains(dbTypeLower, "float") || strings.Contains(dbTypeLower, "double"):
+		return arrow.PrimitiveTypes.Float64
+	case strings.Contains(dbTypeLower, "int") && !strings.Contains(dbTypeLower, "interval"):
+		// Match "int" but not "interval"
+		return arrow.PrimitiveTypes.Int64
+
+	// String types
+	case strings.Contains(dbTypeLower, "clob"):
+		return arrow.BinaryTypes.String
+	case strings.Contains(dbTypeLower, "string") || strings.Contains(dbTypeLower, "char") ||
+		strings.Contains(dbTypeLower, "varchar"):
+		return arrow.BinaryTypes.String
+
+	// Binary types
+	case strings.Contains(dbTypeLower, "blob") || strings.Contains(dbTypeLower, "binary") ||
+		strings.Contains(dbTypeLower, "raw"):
+		return arrow.BinaryTypes.Binary
+
+	// Boolean and special types
+	case strings.Contains(dbTypeLower, "bool"):
+		return arrow.FixedWidthTypes.Boolean
+	case strings.Contains(dbTypeLower, "rowid"):
+		return arrow.BinaryTypes.String
+
+	default:
+		return nil
 	}
 }
 
@@ -342,35 +416,57 @@ func initializeTypeMap() map[string]arrow.DataType {
 		"ubigint":   arrow.PrimitiveTypes.Uint64,
 
 		// Floating point types
-		"real":   arrow.PrimitiveTypes.Float32,
-		"float":  arrow.PrimitiveTypes.Float32,
-		"double": arrow.PrimitiveTypes.Float64,
+		"real":          arrow.PrimitiveTypes.Float32,
+		"float":         arrow.PrimitiveTypes.Float32,
+		"double":        arrow.PrimitiveTypes.Float64,
+		"binary_float":  arrow.PrimitiveTypes.Float32, // Oracle
+		"binary_double": arrow.PrimitiveTypes.Float64, // Oracle
+
+		// Numeric types (Oracle uses NUMBER without precision/scale as FLOAT64)
+		"number": arrow.PrimitiveTypes.Float64,
 
 		// Boolean type
 		"boolean": arrow.FixedWidthTypes.Boolean,
 		"bool":    arrow.FixedWidthTypes.Boolean,
 
 		// String types
-		"varchar": arrow.BinaryTypes.String,
-		"text":    arrow.BinaryTypes.String,
-		"string":  arrow.BinaryTypes.String,
+		"varchar":   arrow.BinaryTypes.String,
+		"varchar2":  arrow.BinaryTypes.String, // Oracle
+		"nvarchar":  arrow.BinaryTypes.String,
+		"nvarchar2": arrow.BinaryTypes.String, // Oracle
+		"char":      arrow.BinaryTypes.String,
+		"nchar":     arrow.BinaryTypes.String, // Oracle
+		"text":      arrow.BinaryTypes.String,
+		"string":    arrow.BinaryTypes.String,
+		"clob":      arrow.BinaryTypes.String, // Oracle
+		"nclob":     arrow.BinaryTypes.String, // Oracle
 
 		// Binary types
 		"blob":      arrow.BinaryTypes.Binary,
 		"bytea":     arrow.BinaryTypes.Binary,
 		"varbinary": arrow.BinaryTypes.Binary,
+		"raw":       arrow.BinaryTypes.Binary, // Oracle
+		"long raw":  arrow.BinaryTypes.Binary, // Oracle
 
 		// Date/Time types
-		"date":      arrow.FixedWidthTypes.Date32,
-		"time":      arrow.FixedWidthTypes.Time32s,
-		"timestamp": arrow.FixedWidthTypes.Timestamp_us,
-		"interval":  arrow.FixedWidthTypes.MonthDayNanoInterval,
+		"date":                           arrow.FixedWidthTypes.Date32,
+		"time":                           arrow.FixedWidthTypes.Time32s,
+		"timestamp":                      arrow.FixedWidthTypes.Timestamp_us,
+		"timestamp with time zone":       arrow.FixedWidthTypes.Timestamp_us, // Oracle
+		"timestamp with local time zone": arrow.FixedWidthTypes.Timestamp_us, // Oracle
+		"interval":                       arrow.FixedWidthTypes.MonthDayNanoInterval,
+		"interval year to month":         arrow.FixedWidthTypes.MonthInterval, // Oracle
+		"interval day to second":         arrow.FixedWidthTypes.Duration_ns,   // Oracle
 
 		// UUID type
 		"uuid": arrow.BinaryTypes.String, // UUID as string for compatibility
 
 		// JSON type
 		"json": arrow.BinaryTypes.String, // JSON as string
+
+		// Oracle special types
+		"rowid":  arrow.BinaryTypes.String, // Oracle ROWID as string
+		"urowid": arrow.BinaryTypes.String, // Oracle UROWID as string
 	}
 }
 
@@ -413,22 +509,55 @@ func initializeReverseMap() map[arrow.Type]string {
 // initializeSQLMap creates the DuckDB type to SQL type code mapping.
 func initializeSQLMap() map[string]int32 {
 	return map[string]int32{
-		"tinyint":   int32(java_sql_Types_TINYINT),
-		"smallint":  int32(java_sql_Types_SMALLINT),
-		"integer":   int32(java_sql_Types_INTEGER),
-		"bigint":    int32(java_sql_Types_BIGINT),
-		"real":      int32(java_sql_Types_REAL),
-		"float":     int32(java_sql_Types_FLOAT),
-		"double":    int32(java_sql_Types_DOUBLE),
-		"decimal":   int32(java_sql_Types_DECIMAL),
-		"numeric":   int32(java_sql_Types_NUMERIC),
-		"boolean":   int32(java_sql_Types_BOOLEAN),
+		// Integer types
+		"tinyint":  int32(java_sql_Types_TINYINT),
+		"smallint": int32(java_sql_Types_SMALLINT),
+		"integer":  int32(java_sql_Types_INTEGER),
+		"bigint":   int32(java_sql_Types_BIGINT),
+
+		// Floating point types
+		"real":          int32(java_sql_Types_REAL),
+		"float":         int32(java_sql_Types_FLOAT),
+		"double":        int32(java_sql_Types_DOUBLE),
+		"binary_float":  int32(java_sql_Types_FLOAT),  // Oracle
+		"binary_double": int32(java_sql_Types_DOUBLE), // Oracle
+
+		// Numeric/Decimal types
+		"decimal": int32(java_sql_Types_DECIMAL),
+		"numeric": int32(java_sql_Types_NUMERIC),
+		"number":  int32(java_sql_Types_NUMERIC), // Oracle NUMBER type
+
+		// Boolean
+		"boolean": int32(java_sql_Types_BOOLEAN),
+
+		// String types
 		"varchar":   int32(java_sql_Types_VARCHAR),
+		"varchar2":  int32(java_sql_Types_VARCHAR),  // Oracle
+		"nvarchar":  int32(java_sql_Types_NVARCHAR), // Oracle
+		"nvarchar2": int32(java_sql_Types_NVARCHAR), // Oracle
+		"char":      int32(java_sql_Types_CHAR),
+		"nchar":     int32(java_sql_Types_NCHAR), // Oracle
 		"text":      int32(java_sql_Types_VARCHAR),
-		"blob":      int32(java_sql_Types_BLOB),
-		"date":      int32(java_sql_Types_DATE),
-		"time":      int32(java_sql_Types_TIME),
-		"timestamp": int32(java_sql_Types_TIMESTAMP),
+		"clob":      int32(java_sql_Types_CLOB),  // Oracle
+		"nclob":     int32(java_sql_Types_NCLOB), // Oracle
+
+		// Binary types
+		"blob":     int32(java_sql_Types_BLOB),
+		"raw":      int32(java_sql_Types_VARBINARY),     // Oracle
+		"long raw": int32(java_sql_Types_LONGVARBINARY), // Oracle
+
+		// Date/Time types
+		"date":                           int32(java_sql_Types_DATE),
+		"time":                           int32(java_sql_Types_TIME),
+		"timestamp":                      int32(java_sql_Types_TIMESTAMP),
+		"timestamp with time zone":       int32(java_sql_Types_TIMESTAMP_WITH_TIMEZONE), // Oracle
+		"timestamp with local time zone": int32(java_sql_Types_TIMESTAMP_WITH_TIMEZONE), // Oracle
+		"interval year to month":         int32(java_sql_Types_OTHER),                   // Oracle
+		"interval day to second":         int32(java_sql_Types_OTHER),                   // Oracle
+
+		// Special types
+		"rowid":  int32(java_sql_Types_ROWID), // Oracle
+		"urowid": int32(java_sql_Types_ROWID), // Oracle
 	}
 }
 
