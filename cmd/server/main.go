@@ -742,6 +742,22 @@ func (s *EnterpriseFlightSQLServer) Handshake(stream flight.FlightService_Handsh
 	return stream.Send(resp)
 }
 
+// Helper method to create FlightInfo from a schema and descriptor
+// This is identical to infoFromDescriptor but kept for backward compatibility
+func (s *EnterpriseFlightSQLServer) infoFromSchema(desc *flight.FlightDescriptor, schema *arrow.Schema) *flight.FlightInfo {
+	// Use the original descriptor's command as the ticket
+	// This ensures the protobuf-encoded command can be properly parsed by DoGet
+	return &flight.FlightInfo{
+		Schema:           flight.SerializeSchema(schema, s.allocator),
+		FlightDescriptor: desc,
+		Endpoint: []*flight.FlightEndpoint{{
+			Ticket: &flight.Ticket{Ticket: desc.Cmd},
+		}},
+		TotalRecords: -1,
+		TotalBytes:   -1,
+	}
+}
+
 // FlightSQL interface implementations
 func (s *EnterpriseFlightSQLServer) GetFlightInfoStatement(ctx context.Context, cmd flightsql.StatementQuery, desc *flight.FlightDescriptor) (*flight.FlightInfo, error) {
 	timer := s.metrics.StartTimer("flight_get_info_statement")
@@ -749,7 +765,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoStatement(ctx context.Context, 
 
 	key := s.cacheKeyGen.GenerateKey(cmd.GetQuery(), nil)
 	if rec, _ := s.memoryCache.Get(ctx, key); rec != nil {
-		return s.infoFromSchema(cmd.GetQuery(), rec.Schema()), nil
+		return s.infoFromSchema(desc, rec.Schema()), nil
 	}
 
 	return s.queryHandler.GetFlightInfo(ctx, cmd.GetQuery())
@@ -1137,7 +1153,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoCrossReference(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get cross reference: %v", err)
 	}
-	return s.infoFromSchema("cross_reference", schema), nil
+	return s.infoFromSchema(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetCrossReference(
@@ -1170,7 +1186,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoXdbcTypeInfo(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get xdbc type info: %v", err)
 	}
-	return s.infoFromSchema("xdbc_type_info", schema), nil
+	return s.infoFromSchema(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetXdbcTypeInfo(
