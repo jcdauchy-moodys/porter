@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -927,36 +926,9 @@ func (s *EnterpriseFlightSQLServer) DoPutPreparedStatementUpdate(ctx context.Con
 	return affected, nil
 }
 
-// DoGet handles all DoGet requests with proper ticket routing
-func (s *EnterpriseFlightSQLServer) DoGet(ctx context.Context, ticket *flight.Ticket) (*arrow.Schema, <-chan flight.StreamChunk, error) {
-	timer := s.metrics.StartTimer("flight_do_get")
-	defer timer.Stop()
-
-	ticketData := string(ticket.Ticket)
-
-	// Handle prepared statement tickets with "PREPARED:" prefix
-	if strings.HasPrefix(ticketData, "PREPARED:") {
-		handle := strings.TrimPrefix(ticketData, "PREPARED:")
-		s.logger.Debug().Str("handle", handle).Msg("Executing prepared statement via DoGet")
-		return s.preparedStatementHandler.ExecuteQuery(ctx, handle, nil)
-	}
-
-	// Handle metadata tickets
-	switch ticketData {
-	case "CATALOGS":
-		s.logger.Debug().Msg("Executing catalog discovery via DoGet")
-		return s.metadataHandler.GetCatalogs(ctx)
-	}
-
-	// For regular query tickets, try to parse as query and execute
-	// This handles standard Flight SQL query tickets
-	if len(ticketData) > 0 {
-		s.logger.Debug().Str("ticket", ticketData).Msg("Executing query from ticket")
-		return s.queryHandler.ExecuteStatement(ctx, ticketData, "")
-	}
-
-	return nil, nil, status.Errorf(codes.InvalidArgument, "invalid ticket format")
-}
+// DoGet is intentionally NOT implemented here to allow the base FlightSQLServer
+// to properly route tickets to the appropriate DoGetTables, DoGetCatalogs, etc. methods.
+// The base server handles all protobuf ticket parsing and routing automatically.
 
 // Metadata discovery methods
 
