@@ -744,30 +744,6 @@ func (s *EnterpriseFlightSQLServer) Handshake(stream flight.FlightService_Handsh
 }
 
 // FlightSQL interface implementations
-
-// GetFlightInfo handles raw Flight descriptors (for backward compatibility with basic Flight clients)
-func (s *EnterpriseFlightSQLServer) GetFlightInfo(ctx context.Context, desc *flight.FlightDescriptor) (*flight.FlightInfo, error) {
-	timer := s.metrics.StartTimer("flight_get_info")
-	defer timer.Stop()
-
-	// Handle raw command descriptors
-	if desc.Type == flight.DescriptorCMD {
-		// Treat the command as a SQL query
-		query := string(desc.Cmd)
-		s.logger.Debug().Str("query", query).Msg("GetFlightInfo with raw command descriptor")
-
-		key := s.cacheKeyGen.GenerateKey(query, nil)
-		if rec, _ := s.memoryCache.Get(ctx, key); rec != nil {
-			return s.infoFromSchema(query, rec.Schema()), nil
-		}
-
-		return s.queryHandler.GetFlightInfo(ctx, query)
-	}
-
-	// For other descriptor types, delegate to base server
-	return nil, status.Errorf(codes.Unimplemented, "descriptor type %v not supported", desc.Type)
-}
-
 func (s *EnterpriseFlightSQLServer) GetFlightInfoStatement(ctx context.Context, cmd flightsql.StatementQuery, desc *flight.FlightDescriptor) (*flight.FlightInfo, error) {
 	timer := s.metrics.StartTimer("flight_get_info_statement")
 	defer timer.Stop()
@@ -983,8 +959,282 @@ func (s *EnterpriseFlightSQLServer) DoGet(ctx context.Context, ticket *flight.Ti
 }
 
 // Metadata discovery methods
-// Note: GetFlightInfoCatalogs and DoGetCatalogs are handled by the base server
-// We don't need to override them here as the base server already has proper implementations
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoCatalogs(
+	ctx context.Context,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_catalogs")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetCatalogs(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get catalogs: %v", err)
+	}
+	return s.infoFromSchema("catalogs", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetCatalogs(
+	ctx context.Context,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_catalogs")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetCatalogs(ctx)
+}
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoSchemas(
+	ctx context.Context,
+	cmd flightsql.GetDBSchemas,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_schemas")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetSchemas(ctx, cmd.GetCatalog(), cmd.GetDBSchemaFilterPattern())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get schemas: %v", err)
+	}
+	return s.infoFromSchema("schemas", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetDBSchemas(
+	ctx context.Context,
+	cmd flightsql.GetDBSchemas,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_schemas")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetSchemas(ctx, cmd.GetCatalog(), cmd.GetDBSchemaFilterPattern())
+}
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoTables(
+	ctx context.Context,
+	cmd flightsql.GetTables,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_tables")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetTables(
+		ctx,
+		cmd.GetCatalog(),
+		cmd.GetDBSchemaFilterPattern(),
+		cmd.GetTableNameFilterPattern(),
+		cmd.GetTableTypes(),
+		cmd.GetIncludeSchema(),
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get tables: %v", err)
+	}
+	return s.infoFromSchema("tables", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetTables(
+	ctx context.Context,
+	cmd flightsql.GetTables,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_tables")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetTables(
+		ctx,
+		cmd.GetCatalog(),
+		cmd.GetDBSchemaFilterPattern(),
+		cmd.GetTableNameFilterPattern(),
+		cmd.GetTableTypes(),
+		cmd.GetIncludeSchema(),
+	)
+}
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoTableTypes(
+	ctx context.Context,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_table_types")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetTableTypes(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get table types: %v", err)
+	}
+	return s.infoFromSchema("table_types", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetTableTypes(
+	ctx context.Context,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_table_types")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetTableTypes(ctx)
+}
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoPrimaryKeys(
+	ctx context.Context,
+	cmd flightsql.TableRef,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_primary_keys")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetPrimaryKeys(ctx, cmd.Catalog, cmd.DBSchema, cmd.Table)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get primary keys: %v", err)
+	}
+	return s.infoFromSchema("primary_keys", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetPrimaryKeys(
+	ctx context.Context,
+	cmd flightsql.TableRef,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_primary_keys")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetPrimaryKeys(ctx, cmd.Catalog, cmd.DBSchema, cmd.Table)
+}
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoImportedKeys(
+	ctx context.Context,
+	cmd flightsql.TableRef,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_imported_keys")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetImportedKeys(ctx, cmd.Catalog, cmd.DBSchema, cmd.Table)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get imported keys: %v", err)
+	}
+	return s.infoFromSchema("imported_keys", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetImportedKeys(
+	ctx context.Context,
+	cmd flightsql.TableRef,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_imported_keys")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetImportedKeys(ctx, cmd.Catalog, cmd.DBSchema, cmd.Table)
+}
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoExportedKeys(
+	ctx context.Context,
+	cmd flightsql.TableRef,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_exported_keys")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetExportedKeys(ctx, cmd.Catalog, cmd.DBSchema, cmd.Table)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get exported keys: %v", err)
+	}
+	return s.infoFromSchema("exported_keys", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetExportedKeys(
+	ctx context.Context,
+	cmd flightsql.TableRef,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_exported_keys")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetExportedKeys(ctx, cmd.Catalog, cmd.DBSchema, cmd.Table)
+}
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoCrossReference(
+	ctx context.Context,
+	cmd flightsql.CrossTableRef,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_cross_reference")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetCrossReference(
+		ctx,
+		cmd.PKRef.Catalog,
+		cmd.PKRef.DBSchema,
+		cmd.PKRef.Table,
+		cmd.FKRef.Catalog,
+		cmd.FKRef.DBSchema,
+		cmd.FKRef.Table,
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get cross reference: %v", err)
+	}
+	return s.infoFromSchema("cross_reference", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetCrossReference(
+	ctx context.Context,
+	cmd flightsql.CrossTableRef,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_cross_reference")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetCrossReference(
+		ctx,
+		cmd.PKRef.Catalog,
+		cmd.PKRef.DBSchema,
+		cmd.PKRef.Table,
+		cmd.FKRef.Catalog,
+		cmd.FKRef.DBSchema,
+		cmd.FKRef.Table,
+	)
+}
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoXdbcTypeInfo(
+	ctx context.Context,
+	cmd flightsql.GetXdbcTypeInfo,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_xdbc_type_info")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetXdbcTypeInfo(ctx, cmd.GetDataType())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get xdbc type info: %v", err)
+	}
+	return s.infoFromSchema("xdbc_type_info", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetXdbcTypeInfo(
+	ctx context.Context,
+	cmd flightsql.GetXdbcTypeInfo,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_xdbc_type_info")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetXdbcTypeInfo(ctx, cmd.GetDataType())
+}
+
+func (s *EnterpriseFlightSQLServer) GetFlightInfoSqlInfo(
+	ctx context.Context,
+	cmd flightsql.GetSqlInfo,
+	desc *flight.FlightDescriptor,
+) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info_sql_info")
+	defer timer.Stop()
+
+	schema, _, err := s.metadataHandler.GetSqlInfo(ctx, cmd.GetInfo())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get sql info: %v", err)
+	}
+	return s.infoFromSchema("sql_info", schema), nil
+}
+
+func (s *EnterpriseFlightSQLServer) DoGetSqlInfo(
+	ctx context.Context,
+	cmd flightsql.GetSqlInfo,
+) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+	timer := s.metrics.StartTimer("flight_do_get_sql_info")
+	defer timer.Stop()
+
+	return s.metadataHandler.GetSqlInfo(ctx, cmd.GetInfo())
+}
 
 // Helper methods
 func (s *EnterpriseFlightSQLServer) infoFromSchema(query string, schema *arrow.Schema) *flight.FlightInfo {
