@@ -943,7 +943,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoCatalogs(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get catalogs: %v", err)
 	}
-	return s.infoFromSchema("catalogs", schema), nil
+	return s.infoFromDescriptor(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetCatalogs(
@@ -967,7 +967,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoSchemas(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get schemas: %v", err)
 	}
-	return s.infoFromSchema("schemas", schema), nil
+	return s.infoFromDescriptor(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetDBSchemas(
@@ -999,7 +999,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoTables(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get tables: %v", err)
 	}
-	return s.infoFromSchema("tables", schema), nil
+	return s.infoFromDescriptor(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetTables(
@@ -1030,7 +1030,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoTableTypes(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get table types: %v", err)
 	}
-	return s.infoFromSchema("table_types", schema), nil
+	return s.infoFromDescriptor(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetTableTypes(
@@ -1054,7 +1054,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoPrimaryKeys(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get primary keys: %v", err)
 	}
-	return s.infoFromSchema("primary_keys", schema), nil
+	return s.infoFromDescriptor(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetPrimaryKeys(
@@ -1079,7 +1079,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoImportedKeys(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get imported keys: %v", err)
 	}
-	return s.infoFromSchema("imported_keys", schema), nil
+	return s.infoFromDescriptor(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetImportedKeys(
@@ -1104,7 +1104,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoExportedKeys(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get exported keys: %v", err)
 	}
-	return s.infoFromSchema("exported_keys", schema), nil
+	return s.infoFromDescriptor(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetExportedKeys(
@@ -1195,7 +1195,7 @@ func (s *EnterpriseFlightSQLServer) GetFlightInfoSqlInfo(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get sql info: %v", err)
 	}
-	return s.infoFromSchema("sql_info", schema), nil
+	return s.infoFromDescriptor(desc, schema), nil
 }
 
 func (s *EnterpriseFlightSQLServer) DoGetSqlInfo(
@@ -1209,11 +1209,9 @@ func (s *EnterpriseFlightSQLServer) DoGetSqlInfo(
 }
 
 // Helper methods
-func (s *EnterpriseFlightSQLServer) infoFromSchema(query string, schema *arrow.Schema) *flight.FlightInfo {
-	desc := &flight.FlightDescriptor{
-		Type: flight.DescriptorCMD,
-		Cmd:  []byte(query),
-	}
+func (s *EnterpriseFlightSQLServer) infoFromDescriptor(desc *flight.FlightDescriptor, schema *arrow.Schema) *flight.FlightInfo {
+	// Use the original descriptor's command as the ticket
+	// This ensures the protobuf-encoded command can be properly parsed by DoGet
 	return &flight.FlightInfo{
 		Schema:           flight.SerializeSchema(schema, s.allocator),
 		FlightDescriptor: desc,
