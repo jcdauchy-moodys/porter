@@ -36,12 +36,15 @@ import (
 	"github.com/TFMV/porter/pkg/infrastructure/metrics"
 	"github.com/TFMV/porter/pkg/infrastructure/pool"
 	"github.com/TFMV/porter/pkg/models"
+	"github.com/TFMV/porter/pkg/repositories"
 	"github.com/TFMV/porter/pkg/repositories/duckdb"
+	"github.com/TFMV/porter/pkg/repositories/oracle"
 	"github.com/TFMV/porter/pkg/services"
 
 	"github.com/TFMV/porter/cmd/server/middleware"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/sijms/go-ora/v2"
 )
 
 var (
@@ -93,6 +96,7 @@ func init() {
 	serveCmd.Flags().StringP("config", "c", "", "config file path")
 	serveCmd.Flags().String("address", "0.0.0.0:32010", "server listen address")
 	serveCmd.Flags().String("database", ":memory:", "DuckDB database path")
+	serveCmd.Flags().String("backend", "duckdb", "database backend (duckdb, clickhouse, oracle)")
 	serveCmd.Flags().String("token", "", "MotherDuck auth token")
 	serveCmd.Flags().String("log-level", "info", "log level (debug, info, warn, error)")
 	serveCmd.Flags().Bool("tls", false, "enable TLS")
@@ -108,6 +112,14 @@ func init() {
 	serveCmd.Flags().Int64("max-message-size", 16*1024*1024, "maximum message size in bytes")
 	serveCmd.Flags().Bool("reflection", true, "enable gRPC reflection")
 	serveCmd.Flags().Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
+
+	// Oracle-specific flags
+	serveCmd.Flags().String("oracle-host", "", "Oracle database host")
+	serveCmd.Flags().Int("oracle-port", 1521, "Oracle database port")
+	serveCmd.Flags().String("oracle-service-name", "", "Oracle service name")
+	serveCmd.Flags().String("oracle-sid", "", "Oracle SID")
+	serveCmd.Flags().String("oracle-user", "", "Oracle username")
+	serveCmd.Flags().String("oracle-password", "", "Oracle password")
 
 	// Benchmark command flags
 	benchCmd.Flags().StringP("query", "q", "", "TPC-H query to run (e.g., 'q1' or 'q1,q5,q22')")
@@ -280,11 +292,41 @@ func createEnterpriseServer(cfg *config.Config, logger zerolog.Logger, metricsCo
 	// Create memory allocator
 	allocator := memory.NewGoAllocator()
 
-	// Create connection pool configuration
-	dsn := infrastructure.NormalizeMotherDuckDSN(cfg.Database)
-	dsn = infrastructure.InjectMotherDuckToken(dsn, cfg.Token)
+	// Create connection pool configuration based on backend
+	var dsn string
+	var driverName string
+
+	switch cfg.Backend {
+	case "oracle":
+		// Build Oracle DSN: oracle://user:password@host:port/servicename
+		if cfg.Oracle.ServiceName != "" {
+			dsn = fmt.Sprintf("oracle://%s:%s@%s:%d/%s",
+				cfg.Oracle.User,
+				cfg.Oracle.Password,
+				cfg.Oracle.Host,
+				cfg.Oracle.Port,
+				cfg.Oracle.ServiceName)
+		} else {
+			dsn = fmt.Sprintf("oracle://%s:%s@%s:%d/%s",
+				cfg.Oracle.User,
+				cfg.Oracle.Password,
+				cfg.Oracle.Host,
+				cfg.Oracle.Port,
+				cfg.Oracle.SID)
+		}
+		driverName = "oracle"
+	case "clickhouse":
+		dsn = cfg.Database
+		driverName = "clickhouse"
+	default: // duckdb
+		dsn = infrastructure.NormalizeMotherDuckDSN(cfg.Database)
+		dsn = infrastructure.InjectMotherDuckToken(dsn, cfg.Token)
+		driverName = "duckdb"
+	}
+
 	poolCfg := pool.Config{
 		DSN:                dsn,
+		DriverName:         driverName,
 		MaxOpenConnections: cfg.MaxConnections,
 		MaxIdleConnections: cfg.MaxConnections / 2,
 		ConnMaxLifetime:    cfg.ConnectionTimeout,
@@ -302,11 +344,24 @@ func createEnterpriseServer(cfg *config.Config, logger zerolog.Logger, metricsCo
 	// Create SQL info provider
 	sqlInfoProvider := infrastructure.NewSQLInfoProvider(allocator)
 
-	// Create repositories
-	queryRepo := duckdb.NewQueryRepository(connPool, allocator, logger)
-	metadataRepo := duckdb.NewMetadataRepository(connPool, sqlInfoProvider, logger)
-	transactionRepo := duckdb.NewTransactionRepository(connPool, logger)
-	preparedStmtRepo := duckdb.NewPreparedStatementRepository(connPool, allocator, logger)
+	// Create repositories based on backend
+	var queryRepo repositories.QueryRepository
+	var metadataRepo repositories.MetadataRepository
+	var transactionRepo repositories.TransactionRepository
+	var preparedStmtRepo repositories.PreparedStatementRepository
+
+	switch cfg.Backend {
+	case "oracle":
+		queryRepo = oracle.NewQueryRepository(connPool, allocator, logger)
+		metadataRepo = oracle.NewMetadataRepository(connPool, sqlInfoProvider, logger)
+		transactionRepo = oracle.NewTransactionRepository(connPool, logger)
+		preparedStmtRepo = oracle.NewPreparedStatementRepository(connPool, allocator, logger)
+	default: // duckdb (and clickhouse would be similar)
+		queryRepo = duckdb.NewQueryRepository(connPool, allocator, logger)
+		metadataRepo = duckdb.NewMetadataRepository(connPool, sqlInfoProvider, logger)
+		transactionRepo = duckdb.NewTransactionRepository(connPool, logger)
+		preparedStmtRepo = duckdb.NewPreparedStatementRepository(connPool, allocator, logger)
+	}
 
 	// Create services
 	transactionService := services.NewTransactionService(
@@ -455,6 +510,7 @@ func loadConfig(cmd *cobra.Command) (*config.Config, error) {
 	cfg := &config.Config{
 		Address:           viper.GetString("address"),
 		Database:          viper.GetString("database"),
+		Backend:           viper.GetString("backend"),
 		Token:             viper.GetString("token"),
 		LogLevel:          viper.GetString("log-level"),
 		MaxConnections:    viper.GetInt("max-connections"),
@@ -462,6 +518,14 @@ func loadConfig(cmd *cobra.Command) (*config.Config, error) {
 		QueryTimeout:      viper.GetDuration("query-timeout"),
 		MaxMessageSize:    viper.GetInt64("max-message-size"),
 		ShutdownTimeout:   viper.GetDuration("shutdown-timeout"),
+		Oracle: config.OracleConfig{
+			Host:        viper.GetString("oracle-host"),
+			Port:        viper.GetInt("oracle-port"),
+			ServiceName: viper.GetString("oracle-service-name"),
+			SID:         viper.GetString("oracle-sid"),
+			User:        viper.GetString("oracle-user"),
+			Password:    viper.GetString("oracle-password"),
+		},
 		TLS: config.TLSConfig{
 			Enabled:  viper.GetBool("tls"),
 			CertFile: viper.GetString("tls-cert"),
