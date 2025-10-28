@@ -744,6 +744,30 @@ func (s *EnterpriseFlightSQLServer) Handshake(stream flight.FlightService_Handsh
 }
 
 // FlightSQL interface implementations
+
+// GetFlightInfo handles raw Flight descriptors (for backward compatibility with basic Flight clients)
+func (s *EnterpriseFlightSQLServer) GetFlightInfo(ctx context.Context, desc *flight.FlightDescriptor) (*flight.FlightInfo, error) {
+	timer := s.metrics.StartTimer("flight_get_info")
+	defer timer.Stop()
+
+	// Handle raw command descriptors
+	if desc.Type == flight.DescriptorCMD {
+		// Treat the command as a SQL query
+		query := string(desc.Cmd)
+		s.logger.Debug().Str("query", query).Msg("GetFlightInfo with raw command descriptor")
+
+		key := s.cacheKeyGen.GenerateKey(query, nil)
+		if rec, _ := s.memoryCache.Get(ctx, key); rec != nil {
+			return s.infoFromSchema(query, rec.Schema()), nil
+		}
+
+		return s.queryHandler.GetFlightInfo(ctx, query)
+	}
+
+	// For other descriptor types, delegate to base server
+	return nil, status.Errorf(codes.Unimplemented, "descriptor type %v not supported", desc.Type)
+}
+
 func (s *EnterpriseFlightSQLServer) GetFlightInfoStatement(ctx context.Context, cmd flightsql.StatementQuery, desc *flight.FlightDescriptor) (*flight.FlightInfo, error) {
 	timer := s.metrics.StartTimer("flight_get_info_statement")
 	defer timer.Stop()
