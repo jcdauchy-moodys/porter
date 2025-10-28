@@ -3,14 +3,19 @@ package middleware
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/subtle"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -80,9 +85,34 @@ func NewAuthMiddleware(cfg config.AuthConfig, logger zerolog.Logger) *AuthMiddle
 
 	// Initialize JWT-related fields if JWT auth is enabled
 	if cfg.Type == "jwt" {
+		// Load HMAC secret if provided
 		if cfg.JWTAuth.Secret != "" {
 			m.HSKey = []byte(cfg.JWTAuth.Secret)
+			logger.Info().Msg("JWT HMAC secret loaded")
 		}
+
+		// Load RSA/ECDSA public key if provided
+		if cfg.JWTAuth.PublicKeyFile != "" {
+			key, err := loadPublicKey(cfg.JWTAuth.PublicKeyFile)
+			if err != nil {
+				logger.Error().Err(err).Str("file", cfg.JWTAuth.PublicKeyFile).Msg("Failed to load JWT public key")
+			} else {
+				m.RSKey = key
+				logger.Info().Str("file", cfg.JWTAuth.PublicKeyFile).Msg("JWT public key loaded")
+			}
+		}
+
+		// Load RSA/ECDSA private key if provided (for token issuance)
+		if cfg.JWTAuth.PrivateKeyFile != "" {
+			key, err := loadPrivateKey(cfg.JWTAuth.PrivateKeyFile)
+			if err != nil {
+				logger.Error().Err(err).Str("file", cfg.JWTAuth.PrivateKeyFile).Msg("Failed to load JWT private key")
+			} else {
+				m.RSKey = key
+				logger.Info().Str("file", cfg.JWTAuth.PrivateKeyFile).Msg("JWT private key loaded")
+			}
+		}
+
 		m.Iss = cfg.JWTAuth.Issuer
 		m.Aud = cfg.JWTAuth.Audience
 	}
@@ -696,4 +726,73 @@ func AuthenticatedUser(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// loadPublicKey loads an RSA or ECDSA public key from a PEM file.
+func loadPublicKey(path string) (interface{}, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read public key file: %w", err)
+	}
+
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block")
+	}
+
+	// Try parsing as PKIX (generic public key format)
+	if key, err := x509.ParsePKIXPublicKey(block.Bytes); err == nil {
+		switch pubKey := key.(type) {
+		case *rsa.PublicKey:
+			return pubKey, nil
+		case *ecdsa.PublicKey:
+			return pubKey, nil
+		default:
+			return nil, fmt.Errorf("unsupported public key type: %T", key)
+		}
+	}
+
+	// Try parsing as RSA public key (PKCS#1)
+	if key, err := x509.ParsePKCS1PublicKey(block.Bytes); err == nil {
+		return key, nil
+	}
+
+	return nil, fmt.Errorf("failed to parse public key")
+}
+
+// loadPrivateKey loads an RSA or ECDSA private key from a PEM file.
+func loadPrivateKey(path string) (interface{}, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read private key file: %w", err)
+	}
+
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block")
+	}
+
+	// Try parsing as PKCS#8 (generic private key format)
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		switch privKey := key.(type) {
+		case *rsa.PrivateKey:
+			return privKey.Public(), nil // Return public key for verification
+		case *ecdsa.PrivateKey:
+			return privKey.Public(), nil // Return public key for verification
+		default:
+			return nil, fmt.Errorf("unsupported private key type: %T", key)
+		}
+	}
+
+	// Try parsing as RSA private key (PKCS#1)
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key.Public(), nil // Return public key for verification
+	}
+
+	// Try parsing as EC private key
+	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+		return key.Public(), nil // Return public key for verification
+	}
+
+	return nil, fmt.Errorf("failed to parse private key")
 }
