@@ -186,7 +186,27 @@ func (tc *typeConverter) getArrowTypeFromColumnType(col *sql.ColumnType) (arrow.
 	// First try database type name
 	dbType := col.DatabaseTypeName()
 	if dbType != "" {
-		return tc.DuckDBToArrowType(dbType)
+		arrowType, err := tc.DuckDBToArrowType(dbType)
+		if err == nil {
+			return arrowType, nil
+		}
+
+		// If DuckDBToArrowType failed, try to infer from Oracle internal type names
+		// The go-ora driver sometimes returns internal Oracle type constants like "timestampdty"
+		inferredType := tc.inferOracleInternalType(dbType)
+		if inferredType != nil {
+			tc.logger.Debug().
+				Str("db_type", dbType).
+				Str("inferred_type", inferredType.String()).
+				Msg("Inferred Oracle internal type")
+			return inferredType, nil
+		}
+
+		// If we still can't convert, log the error but continue to scan type fallback
+		tc.logger.Warn().
+			Str("db_type", dbType).
+			Err(err).
+			Msg("Failed to convert database type, falling back to scan type")
 	}
 
 	// Fall back to scan type
@@ -231,6 +251,59 @@ func (tc *typeConverter) getArrowTypeFromColumnType(col *sql.ColumnType) (arrow.
 	default:
 		// Default to string for unknown types
 		return arrow.BinaryTypes.String, nil
+	}
+}
+
+// inferOracleInternalType attempts to infer Arrow type from Oracle internal type names.
+// The go-ora driver sometimes returns internal Oracle type constants that end with "dty" (data type).
+// Examples: "timestampdty", "numberdty", "stringdty", etc.
+func (tc *typeConverter) inferOracleInternalType(dbType string) arrow.DataType {
+	dbTypeLower := strings.ToLower(dbType)
+
+	// Check for common Oracle internal type patterns
+	// Order matters - check more specific patterns first
+	switch {
+	// Date/Time types - check timestamp before date since "timestamp" contains "time"
+	case strings.Contains(dbTypeLower, "timestamp"):
+		return arrow.FixedWidthTypes.Timestamp_us
+	case strings.Contains(dbTypeLower, "interval"):
+		return arrow.FixedWidthTypes.MonthDayNanoInterval
+	case strings.HasPrefix(dbTypeLower, "date") || strings.Contains(dbTypeLower, "datedty"):
+		// Match "date" at start or "datedty" pattern
+		return arrow.FixedWidthTypes.Date32
+	case strings.Contains(dbTypeLower, "time") && !strings.Contains(dbTypeLower, "timestamp"):
+		// Match "time" but not if it's part of "timestamp"
+		return arrow.FixedWidthTypes.Time64us
+
+	// Numeric types - check before int since numbers might contain "int"
+	case strings.Contains(dbTypeLower, "number") || strings.Contains(dbTypeLower, "numeric"):
+		return arrow.PrimitiveTypes.Float64
+	case strings.Contains(dbTypeLower, "float") || strings.Contains(dbTypeLower, "double"):
+		return arrow.PrimitiveTypes.Float64
+	case strings.Contains(dbTypeLower, "int") && !strings.Contains(dbTypeLower, "interval"):
+		// Match "int" but not "interval"
+		return arrow.PrimitiveTypes.Int64
+
+	// String types
+	case strings.Contains(dbTypeLower, "clob"):
+		return arrow.BinaryTypes.String
+	case strings.Contains(dbTypeLower, "string") || strings.Contains(dbTypeLower, "char") ||
+		strings.Contains(dbTypeLower, "varchar"):
+		return arrow.BinaryTypes.String
+
+	// Binary types
+	case strings.Contains(dbTypeLower, "blob") || strings.Contains(dbTypeLower, "binary") ||
+		strings.Contains(dbTypeLower, "raw"):
+		return arrow.BinaryTypes.Binary
+
+	// Boolean and special types
+	case strings.Contains(dbTypeLower, "bool"):
+		return arrow.FixedWidthTypes.Boolean
+	case strings.Contains(dbTypeLower, "rowid"):
+		return arrow.BinaryTypes.String
+
+	default:
+		return nil
 	}
 }
 

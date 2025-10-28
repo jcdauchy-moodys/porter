@@ -519,4 +519,114 @@ func TestTypeConverter(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("inferOracleInternalType", func(t *testing.T) {
+		// Access the internal typeConverter to test the inference function
+		internalTC := tc.(*typeConverter)
+
+		tests := []struct {
+			name    string
+			dbType  string
+			want    arrow.DataType
+			wantNil bool
+		}{
+			{
+				name:   "timestampdty",
+				dbType: "timestampdty",
+				want:   arrow.FixedWidthTypes.Timestamp_us,
+			},
+			{
+				name:   "TIMESTAMPDTY uppercase",
+				dbType: "TIMESTAMPDTY",
+				want:   arrow.FixedWidthTypes.Timestamp_us,
+			},
+			{
+				name:   "numberdty",
+				dbType: "numberdty",
+				want:   arrow.PrimitiveTypes.Float64,
+			},
+			{
+				name:   "stringdty",
+				dbType: "stringdty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:   "chardty",
+				dbType: "chardty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:   "varchardty",
+				dbType: "varchardty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:   "datedty",
+				dbType: "datedty",
+				want:   arrow.FixedWidthTypes.Date32,
+			},
+			{
+				name:   "timedty",
+				dbType: "timedty",
+				want:   arrow.FixedWidthTypes.Time64us,
+			},
+			{
+				name:   "floatdty",
+				dbType: "floatdty",
+				want:   arrow.PrimitiveTypes.Float64,
+			},
+			{
+				name:   "doubledty",
+				dbType: "doubledty",
+				want:   arrow.PrimitiveTypes.Float64,
+			},
+			{
+				name:   "integerdty",
+				dbType: "integerdty",
+				want:   arrow.PrimitiveTypes.Int64,
+			},
+			{
+				name:   "blobdty",
+				dbType: "blobdty",
+				want:   arrow.BinaryTypes.Binary,
+			},
+			{
+				name:   "rawdty",
+				dbType: "rawdty",
+				want:   arrow.BinaryTypes.Binary,
+			},
+			{
+				name:   "clobdty",
+				dbType: "clobdty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:   "intervaldty",
+				dbType: "intervaldty",
+				want:   arrow.FixedWidthTypes.MonthDayNanoInterval,
+			},
+			{
+				name:   "rowiddty",
+				dbType: "rowiddty",
+				want:   arrow.BinaryTypes.String,
+			},
+			{
+				name:    "unknown type",
+				dbType:  "unknowndty",
+				wantNil: true,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				got := internalTC.inferOracleInternalType(tt.dbType)
+				if tt.wantNil {
+					assert.Nil(t, got)
+				} else {
+					require.NotNil(t, got)
+					assert.Equal(t, tt.want, got)
+				}
+			})
+		}
+	})
 }
