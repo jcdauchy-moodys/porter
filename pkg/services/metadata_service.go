@@ -88,6 +88,18 @@ func (s *metadataService) GetTables(ctx context.Context, opts models.GetTablesOp
 		return nil, err
 	}
 
+	// If no table types specified, default to all common types
+	// This handles cases where FlightSQL clients (like Grafana) send empty GetTablesOpts
+	if len(opts.TableTypes) == 0 {
+		s.logger.Debug("No table types specified, using default types")
+		opts.TableTypes = []string{
+			// Common table types across databases
+			"TABLE", "BASE TABLE", "VIEW", "SYSTEM TABLE", "SYSTEM VIEW",
+			"MATERIALIZED VIEW", "SYNONYM", "ALIAS", "FOREIGN TABLE",
+			"GLOBAL TEMPORARY", "LOCAL TEMPORARY",
+		}
+	}
+
 	tables, err := s.repo.GetTables(ctx, opts)
 	if err != nil {
 		s.metrics.IncrementCounter("metadata_errors", "operation", "get_tables")
